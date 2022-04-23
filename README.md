@@ -1,1 +1,366 @@
-# yewq.github.io
+# IndluxDB - V2.1.1
+
+InfluxDB 是一个可编程且高性能的时间序列数据库，外层封装了http协议接口。由守护进程 `influxd` 和命令行接口 `influx` 两个程序组成。
+
+InfluxDB 使用 `Line` 格式写入数据库，有以下方式写入数据库：
+1. InfluxDB v2 API ( HTTP 接口，是以下方式的基础)
+2. InfluxDB v2 API 客户端库(包括 python 等语言的实现)
+3. 命令行接口 (influx)
+4. InfluxDB UI (Web)
+5. Telegraf 插件
+
+InfluxDB 使用 `Flux` 语言查询数据库，有以下方式查询数据库：
+1. InfluxDB v2 API
+2. InfluxDB v2 API 客户端库
+3. 命令行接口 (influx)
+4. InfluxDB UI (Web)
+
+InfluxDB 可以对数据进行监控和警报。
+
+![架构框图](https://www.influxdata.com/wp-content/uploads/APM-Diagram-2.png)
+
+【目录】
+- [下载 influxd](#下载-influxd)
+- [influxd 默认文件系统布局](#influxd-默认文件系统布局)
+- [使用 systemd 服务管理 influxd](#使用-systemd-服务管理-influxd)
+- [下载 influx](#下载-influx)
+- [使用 influx 进行初始化配置](#使用-influx-进行初始化配置)
+- [使用 influx 写数据库](#使用-influx-写数据库)
+- [使用 influx 读数据库](#使用-influx-读数据库)
+- [下载 telegraf](#下载-telegraf)
+- [编写 telegraf 配置文件](#编写-telegraf-配置文件)
+- [运行 telegraf 插件](#运行-telegraf-插件)
+- [使用 systemd 服务管理 telegraf](#使用-systemd-服务管理-telegraf)
+- [参考资料](#参考资料)
+
+## 下载 influxd
+
+influxd 是一个守护进程，服务默认会在8086端口监听，可以使用 http 协议访问该端口的 web、InfluxDB v2 API。
+
+```bash
+### amd64 架构
+$ wget https://dl.influxdata.com/influxdb/releases/influxdb2-2.1.1-linux-amd64.tar.gz
+### arm64 架构
+$ wget https://dl.influxdata.com/influxdb/releases/influxdb2-2.1.1-linux-arm64.tar.gz
+$ tar -zxf influxdb2-2.1.1-linux-arm64.tar.gz
+$ cd influxdb2-2.1.1-linux-arm64
+```
+```bash
+### 默认数据存储目录均为 `~/.influxdbv2/`
+### --reporting-disabled: 不将调试信息发送给 influxdata
+### --bolt-path: BoltDB数据库路径，用来存储包括组织和用户信息、UI 数据、REST 资源和其他关键值数据。
+### --engine-path: 核心引擎数据库文件路径，存储时间结构合并树(Time-Structure Merge Tree (TSM))
+### --sqlite-path: BoltDB数据库路径，存储笔记本（数据处理）和注释的元数据。
+$ ./influxd \
+  --reporting-disabled \
+  --bolt-path=/opt/jingjiamicro/log/influxdbv2/influxd.bolt \
+  --engine-path=/opt/jingjiamicro/log/influxdbv2/engine \
+  --sqlite-path=/opt/jingjiamicro/log/influxdbv2/influxd.sqlite \
+  --http-bind-address=:8086
+```
+
+- [【文档】手动下载安装 Influxd ](https://docs.influxdata.com/influxdb/v2.1/install/?t=Linux#manually-download-and-install-the-influxd-binary)
+- [【手册】influxd 配置选项](https://docs.influxdata.com/influxdb/v2.1/reference/config-options)
+
+## influxd 默认文件系统布局
+
+```
+- ~/.influxdbv2/
+- - engine/
+- - - data/
+- - - - TSM directories and files
+- - - wal/
+- - - - WAL directories and files
+- - configs
+- - influxd.bolt
+- - influxd.sqlite
+```
+
+- [【文档】InfluxDB 文件系统布局](https://docs.influxdata.com/influxdb/v2.2/reference/internals/file-system-layout/?t=Linux#installed-as-a-standalone-binary)
+
+## 使用 systemd 服务管理 influxd
+
+```bash
+### systemd 服务 unit 配置文件，指定了 influxd 二进制文件路径、环境变量路径
+$ cat /etc/systemd/system/yewq-influxdb.service
+[Unit]
+After=network.target
+
+[Service]
+EnvironmentFile=/home/yewq/yewq.cn/influxdb/etc/env
+ExecStart=/home/yewq/yewq.cn/influxdb/bin/influxd
+Restart=on-failure
+RestartForceExitStatus=SIGPIPE
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+### 指定配置文件路径
+$ cat /home/yewq/yewq.cn/influxdb/etc/env
+INFLUXD_CONFIG_PATH=/home/yewq/yewq.cn/influxdb/etc/config.json
+```
+
+```bash
+### 配置选项文件
+$ cat /home/yewq/yewq.cn/influxdb/etc/config.json
+{
+  "reporting-disabled": true,
+  "bolt-path": "/home/yewq/yewq.cn/influxdb/var/lib/influxdbv2/influxd.bolt",
+  "engine-path": "/home/yewq/yewq.cn/influxdb/var/lib/influxdbv2/engine",
+  "sqlite-path": "/home/yewq/yewq.cn/influxdb/var/lib/influxdbv2/influxd.sqlite",
+  "http-bind-address": ":28086"
+}
+```
+
+- [【手册】influxd 配置选项](https://docs.influxdata.com/influxdb/v2.1/reference/config-options)
+
+## 下载 influx
+
+```bash
+### amd64
+$ wget https://dl.influxdata.com/influxdb/releases/influxdb2-client-2.2.0-linux-amd64.tar.gz
+### arm
+$ wget https://dl.influxdata.com/influxdb/releases/influxdb2-client-2.2.0-linux-arm64.tar.gz
+$ tar -zxf influxdb2-client-2.2.0-linux-arm64.tar.gz
+$ cd influxdb2-client-2.2.0-linux-arm64
+$ ./influx
+```
+
+- [【文档】下载 influx CLI ](https://docs.influxdata.com/influxdb/v2.1/tools/influx-cli/?t=Linux)
+
+## 使用 influx 进行初始化配置
+
+第一次使用 influxd 需要进行初始化配置。可以使用 web UI，也可以使用 `influx setup`指令。
+`influx setup` 指令会自动将 name, host, token, org 四个参数记录下来，存在 configs-path 路径下，方便下次直接连接服务端，省去认证字段的重复输入。
+该配置文件使用 ini 数据格式。后续还可以使用 `influx config` 指令增加需要认证的服务端，并设置处于默认激活状态的服务端。
+
+```bash
+### --name: 指定 ini 配置文件的段名，非必须。
+### --configs-path: 配置存储目录，默认配置目录为 `~/.influxdbv2/configs` 
+### --host: influxd 地址
+### --username: web登录用户名
+### --password: web登录密码 
+### --token: http 协议访问的鉴权
+### --org: 组织名称
+### --bucket: 存储桶
+### --retention: 存储桶保留时间
+### --force:	跳过确认提示
+$ ./influx setup \
+  --name jingjiamicro \
+  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
+  --host http://localhost:8086 \
+  --username admin \
+  --password jj@123456 \
+  --token jingjiamicro-influxdb \
+  --org jingjiamicro \
+  --bucket storage \
+  --retention 156w \
+  --force 
+```
+```ini
+### influx 配置文件示例
+$ sudo cat /opt/jingjiamicro/log/influxdbv2/configs
+[jingjiamicro]
+  url = "http://localhost:8086"
+  token = "jingjiamicro-influxdb"
+  org = "jingjiamicro"
+  active = true
+# 
+# [eu-central]
+#   url = "https://eu-central-1-1.aws.cloud2.influxdata.com"
+#   token = "XXX"
+#   org = ""
+# 
+# [us-central]
+#   url = "https://us-central1-1.gcp.cloud2.influxdata.com"
+#   token = "XXX"
+#   org = ""
+# 
+# [us-west]
+#   url = "https://us-west-2-1.aws.cloud2.influxdata.com"
+#   token = "XXX"
+#   org = ""
+```
+
+- [【文档】通过 influx CLI 设置 InfluxDB](https://docs.influxdata.com/influxdb/v2.1/install/?t=CLI+Setup#set-up-influxdb-through-the-influx-cli)
+- [【手册】influx setup](https://docs.influxdata.com/influxdb/v2.1/reference/cli/influx/setup/)
+- [【手册】influx config](https://docs.influxdata.com/influxdb/v2.1/reference/cli/influx/config/)
+
+## 使用 influx 写数据库
+
+```bash
+### 待写入数据库的文件使用 Line 格式
+$ cat /opt/jingjiamicro/log/armbit.txt
+m,host=host1 field1=1.2
+m,host=host2 field1=2.4
+m,host=host1 field2=5i
+m,host=host2 field2=3i
+### --configs-path: 指定认证配置问价路径，默认为 `~/.influxdbv2/configs`
+### --precision: 时间戳精度
+### --file: 待写入的文本数据路径
+$ ./influx write \
+  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
+  --bucket storage \
+  --precision s \
+  --file /opt/jingjiamicro/log/armbit.txt
+```
+
+- [【手册】influx write ](https://docs.influxdata.com/influxdb/v2.1/reference/cli/influx/write/)
+- [【手册】Line 格式](https://docs.influxdata.com/influxdb/v2.1/reference/syntax/line-protocol/)
+
+## 使用 influx 读数据库
+
+```bash
+### 使用 Flux 语言查询数据库
+### range 函数：设置查询时间范围。
+### filter 函数：设置数据滤波器。
+### map 函数：可以对值进行数学运算。
+### aggregateWindow 函数：聚合函数。
+$ ./influx query \
+  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
+  "
+  from(bucket:"storage") 
+    |> range(start:-1d)
+    |> filter(fn: (r) => r["_measurement"] == "ArmBit")
+    |> filter(fn: (r) => r["_field"] == "AD79_0V88_FT_VDD_CORE")
+    |> map(fn: (r) => ({r with _value: 100.0-r._value }))
+    |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+  "
+```
+
+- [【文档】influx query 对列进行操作](https://docs.influxdata.com/influxdb/v2.2/query-data/common-queries/operate-on-columns/)
+- [【文档】Query with Flux 使用数学运算转换数据](https://docs.influxdata.com/influxdb/v2.1/query-data/flux/mathematic-operations/)
+- [【手册】influx query ](https://docs.influxdata.com/influxdb/v2.1/reference/cli/influx/query/)
+- [【手册】Flux range 函数](https://docs.influxdata.com/flux/v0.x/stdlib/universe/range/)
+- [【手册】Flux filter 函数](https://docs.influxdata.com/flux/v0.x/stdlib/universe/filter/)
+- [【手册】Flux map 函数](https://docs.influxdata.com/flux/v0.x/stdlib/universe/map/)
+- [【手册】Flux aggregateWindow 函数](https://docs.influxdata.com/flux/v0.x/stdlib/universe/aggregatewindow/)
+
+## 下载 telegraf
+
+```bash
+### amd64
+$ wget https://dl.influxdata.com/telegraf/releases/telegraf-1.21.4_linux_amd64.tar.gz
+### arm64
+$ wget https://dl.influxdata.com/telegraf/releases/telegraf-1.21.4_linux_arm64.tar.gz
+$ tar -zxf telegraf-1.21.4_linux_arm64.tar.gz
+$ cd telegraf-1.21.4_linux_arm64
+```
+
+- [【文档】下载 telegraf](https://portal.influxdata.com/downloads/)
+
+## 编写 telegraf 配置文件
+
+在 Telegraf 配置文件（通常命名为telegraf.conf）中配置 Telegraf 输入和输出插件。输入插件收集指标。输出插件定义发送指标的目的地。使用 `telegraf config > telegraf.conf` 可生成默认配置文件供参考。
+
+```ini
+### agent: 采样周期
+### inputs.xxx: 输入插件配置
+### outputs.xxx: 输出插件配置
+$ cat /opt/jingjiamicro/log/telegraf/telegraf.conf
+[agent]
+  interval = "10s"
+
+[[inputs.cpu]]
+  percpu = true
+  totalcpu = true
+  collect_cpu_time = false
+  report_active = false
+  
+[[inputs.disk]]
+  ignore_fs = ["tmpfs", "devtmpfs", "devfs", "iso9660", "overlay", "aufs", "squashfs"]
+
+[[inputs.diskio]]
+
+[[inputs.mem]]
+
+[[inputs.net]]
+
+[[inputs.processes]]
+
+[[inputs.swap]]
+
+[[inputs.system]]
+
+[[outputs.influxdb_v2]]
+  urls = ["http://127.0.0.1:8086"]
+  token = "jingjiamicro-influxdb"
+  organization = "jingjiamicro"
+  bucket = "storage"
+```
+
+- [【文档】配置 Telegraf](https://docs.influxdata.com/telegraf/v1.21/administration/configuration/)
+- [【文档】Telegraf 插件](https://docs.influxdata.com/telegraf/v1.21/plugins/)
+- [【文档】inputs.cpu](https://github.com/influxdata/telegraf/blob/master/plugins/inputs/cpu)
+- [【文档】inputs.disk](https://github.com/influxdata/telegraf/blob/master/plugins/inputs/disk)
+- [【文档】inputs.diskio](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/diskio)
+- [【文档】inputs.mem](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/mem)
+- [【文档】inputs.net](https://github.com/influxdata/telegraf/blob/master/plugins/inputs/net/NET_README.md)
+- [【文档】inputs.processes](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/processes)
+- [【文档】inputs.swap](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/swap)
+- [【文档】inputs.system](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/system)
+- [【文档】手动配置 Telegraf 输出](https://docs.influxdata.com/influxdb/v2.1/write-data/no-code/use-telegraf/manual-config/)
+
+## 运行 telegraf 插件
+
+```bash
+### 方式一：直接指定本地配置文件
+### 启动 telegraf 插件
+$ ./telegraf --config /opt/jingjiamicro/log/telegraf/telegraf.conf
+### --test: 试运行，不会将数据传到输出组件
+$ ./telegraf --config /opt/jingjiamicro/log/telegraf/telegraf.conf --test
+```
+```bash
+### 方式二：指定 influxd 网络配置文件
+### 将 telegraf 配置文件传入 influxdb 中
+$ ./influx telegrafs create \
+  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
+  --file /opt/jingjiamicro/log/telegraf/telegraf.conf
+### telegraf 从 influxd 中拉取配置文件运行
+$ ./telegraf --config http://localhost:8086/api/v2/telegrafs/<telegraf-config-id>
+```
+
+- [【文档】启动 telegraf](https://docs.influxdata.com/influxdb/v2.1/write-data/no-code/use-telegraf/manual-config/#start-telegraf)
+- [【手册】Telegraf commands and flags](https://docs.influxdata.com/telegraf/v1.21/administration/commands/)
+- [【文档】influxdb 创建 Telegraf 配置](https://docs.influxdata.com/influxdb/v2.1/telegraf-configs/create/#use-the-influx-cli)
+- [【手册】influx telegrafs create](https://docs.influxdata.com/influxdb/v2.1/reference/cli/influx/telegrafs/create/)
+- [【文档】使用 InfluxDB Telegraf 配置](https://docs.influxdata.com/influxdb/v2.1/telegraf-configs/)
+
+## 使用 systemd 服务管理 telegraf
+
+```bash
+### systemd 服务 unit 配置文件，指定了 telegraf 二进制文件路径、环境变量路径
+$ cat /etc/systemd/system/yewq-telegraf.service 
+[Unit]
+Description=The plugin-driven server agent for reporting metrics into InfluxDB
+Documentation=https://github.com/influxdata/telegraf
+After=network.target
+
+[Service]
+EnvironmentFile=/home/yewq/yewq.cn/telegraf/etc/env
+ExecStart=/home/yewq/yewq.cn/telegraf/bin/telegraf --config https://influxdb.yewq.cn/api/v2/telegrafs/0936b5e0a6cb0000
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartForceExitStatus=SIGPIPE
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+### 环境变量文件
+$ cat /home/yewq/yewq.cn/telegraf/etc/env
+INFLUX_TOKEN=Yv8PpRjKdfzM8mJfNxZHIJoaH5mJ8BUyIPNg1wVSMPSag0bAPqrF2Em2meQcJFa0ZIGZpSR1EA0aQ9LzBDZiNg==
+```
+
+- [【文档】自动配置 Telegraf](https://docs.influxdata.com/influxdb/v2.1/write-data/no-code/use-telegraf/auto-config/)
+
+## 参考资料
+1. [【主页】InfluxDB ](https://www.influxdata.com/)
+2. [【文档】InfluxDB](https://docs.influxdata.com/influxdb/latest/introduction/get-started/)
+3. [【文档】telegraf](https://docs.influxdata.com/telegraf/)
+4. [【源码】influxdb Github 仓库](https://github.com/influxdata/influxdb)
