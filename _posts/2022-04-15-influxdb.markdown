@@ -1,4 +1,9 @@
-# IndluxDB - V2.1.1
+---
+layout: post
+title:  "IndluxDB - V2.1.1"
+date:   2022-04-15 15:13:44 +0800
+categories: linux
+---
 
 InfluxDB 是一个可编程且高性能的时间序列数据库，外层封装了http协议接口。由守护进程 `influxd` 和命令行接口 `influx` 两个程序组成。
 
