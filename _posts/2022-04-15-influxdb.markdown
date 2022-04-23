@@ -58,9 +58,9 @@ $ cd influxdb2-2.1.1-linux-arm64
 ### --sqlite-path: BoltDB数据库路径，存储笔记本（数据处理）和注释的元数据。
 $ ./influxd \
   --reporting-disabled \
-  --bolt-path=/opt/jingjiamicro/log/influxdbv2/influxd.bolt \
-  --engine-path=/opt/jingjiamicro/log/influxdbv2/engine \
-  --sqlite-path=/opt/jingjiamicro/log/influxdbv2/influxd.sqlite \
+  --bolt-path=/opt/yewq/log/influxdbv2/influxd.bolt \
+  --engine-path=/opt/yewq/log/influxdbv2/engine \
+  --sqlite-path=/opt/yewq/log/influxdbv2/influxd.sqlite \
   --http-bind-address=:8086
 ```
 
@@ -154,24 +154,24 @@ $ ./influx
 ### --retention: 存储桶保留时间
 ### --force:	跳过确认提示
 $ ./influx setup \
-  --name jingjiamicro \
-  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
+  --name yewq \
+  --configs-path /opt/yewq/log/influxdbv2/configs \
   --host http://localhost:8086 \
   --username admin \
   --password jj@123456 \
-  --token jingjiamicro-influxdb \
-  --org jingjiamicro \
+  --token yewq-influxdb \
+  --org yewq \
   --bucket storage \
   --retention 156w \
   --force 
 ```
 ```ini
 ### influx 配置文件示例
-$ sudo cat /opt/jingjiamicro/log/influxdbv2/configs
-[jingjiamicro]
+$ sudo cat /opt/yewq/log/influxdbv2/configs
+[yewq]
   url = "http://localhost:8086"
-  token = "jingjiamicro-influxdb"
-  org = "jingjiamicro"
+  token = "yewq-influxdb"
+  org = "yewq"
   active = true
 # 
 # [eu-central]
@@ -198,7 +198,7 @@ $ sudo cat /opt/jingjiamicro/log/influxdbv2/configs
 
 ```bash
 ### 待写入数据库的文件使用 Line 格式
-$ cat /opt/jingjiamicro/log/armbit.txt
+$ cat /opt/yewq/log/armbit.txt
 m,host=host1 field1=1.2
 m,host=host2 field1=2.4
 m,host=host1 field2=5i
@@ -207,10 +207,10 @@ m,host=host2 field2=3i
 ### --precision: 时间戳精度
 ### --file: 待写入的文本数据路径
 $ ./influx write \
-  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
+  --configs-path /opt/yewq/log/influxdbv2/configs \
   --bucket storage \
   --precision s \
-  --file /opt/jingjiamicro/log/armbit.txt
+  --file /opt/yewq/log/armbit.txt
 ```
 
 - [【手册】influx write ](https://docs.influxdata.com/influxdb/v2.1/reference/cli/influx/write/)
@@ -225,7 +225,7 @@ $ ./influx write \
 ### map 函数：可以对值进行数学运算。
 ### aggregateWindow 函数：聚合函数。
 $ ./influx query \
-  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
+  --configs-path /opt/yewq/log/influxdbv2/configs \
   "
   from(bucket:"storage") 
     |> range(start:-1d)
@@ -265,7 +265,7 @@ $ cd telegraf-1.21.4_linux_arm64
 ### agent: 采样周期
 ### inputs.xxx: 输入插件配置
 ### outputs.xxx: 输出插件配置
-$ cat /opt/jingjiamicro/log/telegraf/telegraf.conf
+$ cat /opt/yewq/log/telegraf/telegraf.conf
 [agent]
   interval = "10s"
 
@@ -292,8 +292,8 @@ $ cat /opt/jingjiamicro/log/telegraf/telegraf.conf
 
 [[outputs.influxdb_v2]]
   urls = ["http://127.0.0.1:8086"]
-  token = "jingjiamicro-influxdb"
-  organization = "jingjiamicro"
+  token = "yewq-influxdb"
+  organization = "yewq"
   bucket = "storage"
 ```
 
@@ -314,16 +314,16 @@ $ cat /opt/jingjiamicro/log/telegraf/telegraf.conf
 ```bash
 ### 方式一：直接指定本地配置文件
 ### 启动 telegraf 插件
-$ ./telegraf --config /opt/jingjiamicro/log/telegraf/telegraf.conf
+$ ./telegraf --config /opt/yewq/log/telegraf/telegraf.conf
 ### --test: 试运行，不会将数据传到输出组件
-$ ./telegraf --config /opt/jingjiamicro/log/telegraf/telegraf.conf --test
+$ ./telegraf --config /opt/yewq/log/telegraf/telegraf.conf --test
 ```
 ```bash
 ### 方式二：指定 influxd 网络配置文件
 ### 将 telegraf 配置文件传入 influxdb 中
 $ ./influx telegrafs create \
-  --configs-path /opt/jingjiamicro/log/influxdbv2/configs \
-  --file /opt/jingjiamicro/log/telegraf/telegraf.conf
+  --configs-path /opt/yewq/log/influxdbv2/configs \
+  --file /opt/yewq/log/telegraf/telegraf.conf
 ### telegraf 从 influxd 中拉取配置文件运行
 $ ./telegraf --config http://localhost:8086/api/v2/telegrafs/<telegraf-config-id>
 ```
