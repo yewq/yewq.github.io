@@ -1,0 +1,595 @@
+# drbd
+
+`DRDB`: Distributed Replicated Block Device, 分布式复制块设备。在主机之间镜像块设备，相当于网络 RAID 1。
+
+`kmod-drbd`: drbd 的内核模块。该模块会生成 /dev/drbd* 块设备供应用程序使用。
+
+![DRBD 在 Linux I/O 堆栈中的位置](https://linbit.com/wp-content/uploads/drbd/drbd-guide-9_0-en/images/drbd-in-kernel.png)
+
+`drbd-utils`: drbd 在用户态的管理工具。
+- `drbdadm`: drbdsetup 和 drbdmeta 的前端。
+- `drbdsetup`: 
+- `drbdmeta`: 
+
+`Resource Roles`: 资源角色。 
+- `Primary`: 主要，具有对 drbd 块设备的读写权限。单主模式下，同一时刻，集群内只能有一个 Primary。
+- `Secondary`: 备用，用户没有对 drbd 块设备的读写权限，只有内核态 drbd 程序能从 Primary 处更新数据。
+
+`auto-promote`: 主备自动切换。
+- 不需要显示发送 drbdadm secondary 、drbdadm primary 命令。
+- 当应用程序没用用到 drbd 块设备的时候，会自动切换到 secondary 。
+- 当需要用到 drbd 块设备的时候，会尝试切换到 primary, 如果没有其他节点是 primary 时，可以自动切换成功，反之失败。
+
+【目录】
+- [drbd 元数据](#drbd-元数据)
+- [安装 kmod-drbd, drbd-utils](#安装-kmod-drbd-drbd-utils)
+- [配置文件](#配置文件)
+- [启动 drbd 进行数据同步](#启动-drbd-进行数据同步)
+- [监控 drbd 状态](#监控-drbd-状态)
+- [运维命令](#运维命令)
+- [显示元数据](#显示元数据)
+- [性能测试](#性能测试)
+- [帮助文档](#帮助文档)
+- [参考资料](#参考资料)
+
+
+## drbd 元数据
+
+`size`: DRBD设备容量。
+
+`GI`: Generation Identifier, 世代标识符。128 bit 的 uuid，用来标识节点间的数据同步状态。指明数据同步方向。
+> 有三种情况会产生新的 GI：
+> 1. 主节点与从节点断开资源时。
+> 2. 与主节点断线的从节点提升为主节点时。
+> 3. 明确初始设备同步。  
+> ![开始新的数据生成](https://linbit.com/wp-content/uploads/drbd/users-guide-drbd-8-4/images/gi-changes-newgen.png)  
+> ![开始重新同步](https://linbit.com/wp-content/uploads/drbd/users-guide-drbd-8-4/images/gi-changes-syncstart.png)  
+> ![完成重新同步](https://linbit.com/wp-content/uploads/drbd/users-guide-drbd-8-4/images/gi-changes-synccomplete.png)  
+`AL`: Activity Log, 活动日志。在主节点写入数据时，标识需要写入的块为活动块。一个活动日志由32bit地址组成，每个地址代表4MiB的范围。主要用作是在主节点写数据时，节点间因网络等原因不能保证完全同步块；此时主节点突然临时断线，数据只在本地，远端没有任何记录数据；下次再加入集群时，就可以根据 AL 快速回滚这些还没有完全同步的块。
+
+`bitmap`: 位图。在节点间断开连接后工作，标识节点间的不同的块。在内存中实现，每bit映射4KiB扇区。当 AL 标记为非活动区后写入磁盘，避免了频繁写入。
+
+[【文档】drbd-9.0: 15. DRBD 内部结构](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#ch-internals)
+[【文档】drbd-8.4: 16. DRBD 内部结构](https://linbit.com/drbd-user-guide/users-guide-drbd-8-4/#ch-internals)
+
+## 安装 kmod-drbd, drbd-utils
+
+### 发行版 rpm 包直接安装
+
+```bash
+### kmod-drbd 由 elrepo 仓库提供
+$ sudo rpm -Uvh https://mirrors.ustc.edu.cn/elrepo/elrepo/el8/x86_64/RPMS/kmod-drbd90-9.1.5-1.el8_5.elrepo.x86_64.rpm
+$ sudo modprobe drbd
+### drbd 由 epel 仓库提供，包含 drbd-udev drbd-utils 两个依赖
+$ sudo yum install drbd
+```
+
+### 源码编译安装
+
+```bash
+### 源码安装 kmod-drbd
+$ wget https://pkg.linbit.com//downloads/drbd/9/drbd-9.1.7.tar.gz
+$ tar -zxf drbd-9.1.7.tar.gz 
+$ cd drbd-9.1.7/
+$ make
+$ sudo make install
+$ ll /lib/modules/$(uname -r)/updates/
+total 12432
+-rw-r--r-- 1 root root 12016424 Apr 25 14:25 drbd.ko
+-rw-r--r-- 1 root root   711576 Apr 25 14:25 drbd_transport_tcp.ko
+### 源码安装 drbd-utils
+$ wget https://pkg.linbit.com//downloads/drbd/utils/drbd-utils-9.20.2.tar.gz
+$ tar -zxf drbd-utils-9.20.2.tar.gz
+$ cd drbd-utils-9.20.2/
+$ sudo yum install rubygem-asciidoctor
+$ sudo yum install po4a
+$ make
+$ sudo make install
+$ ll /usr/local/sbin/
+total 1944
+-rwxr-xr-x 1 root root 884488 Apr 25 14:39 drbdadm
+-rwxr-xr-x 1 root root 395224 Apr 25 14:39 drbdmeta
+-rwxr-xr-x 1 root root 719424 Apr 25 14:39 drbdsetup
+```
+
+```bash
+### 使用 rpm 包的源码编译 drbd-utils
+$ mkdir drbd
+$ cd drbd
+$ wget https://mirrors.ustc.edu.cn/epel/8/Everything/SRPMS/Packages/d/drbd-9.17.0-1.el8.src.rpm
+$ rpm -Uvh drbd-9.17.0-1.el8.src.rpm
+$ vi ~/rpmbuild/SPECS/drbd.spec
+......
+#Release: 1%{dist}
+Release: 1
+......
+$ sudo yum builddep ~/rpmbuild/SPECS/drbd.spec
+$ rpmbuild -ba ~/rpmbuild/SPECS/drbd.spec
+$ ll ~/rpmbuild/RPMS/aarch64
+total 2108
+-rw-rw-r-- 1 yewq yewq  21240 Apr 25 10:42 drbd-9.17.0-1.ky10.aarch64.rpm
+-rw-rw-r-- 1 yewq yewq   9928 Apr 25 10:42 drbd-bash-completion-9.17.0-1.ky10.aarch64.rpm
+-rw-rw-r-- 1 yewq yewq 989120 Apr 25 10:42 drbd-debuginfo-9.17.0-1.ky10.aarch64.rpm
+-rw-rw-r-- 1 yewq yewq 350340 Apr 25 10:42 drbd-debugsource-9.17.0-1.ky10.aarch64.rpm
+-rw-rw-r-- 1 yewq yewq  38168 Apr 25 10:42 drbd-pacemaker-9.17.0-1.ky10.aarch64.rpm
+-rw-rw-r-- 1 yewq yewq  10372 Apr 25 10:42 drbd-rgmanager-9.17.0-1.ky10.aarch64.rpm
+-rw-rw-r-- 1 yewq yewq   8552 Apr 25 10:42 drbd-udev-9.17.0-1.ky10.aarch64.rpm
+-rw-rw-r-- 1 yewq yewq 709328 Apr 25 10:42 drbd-utils-9.17.0-1.ky10.aarch64.rpm
+```
+
+## 配置文件
+
+```bash
+### global_common.conf: 全局配置文件，common 中的配置会在 .res 文件中得到继承
+### usage-count: 是否将使用数据上传给 linbit 公司
+### split-brain: 裂脑时调用的处理程序，默认只是邮件通知
+### auto-promote: 自动降级与升级
+### on-io-error: 磁盘 io 错误的处理方式，detach 为自动分离，变成无盘模式(diskless)
+### protocol: 复制模式，C 为同步复制
+### verify-alg: 验证算法，调用 drbdadm verify 时会使用 md5 校验算法
+### after-sb-0pri: 识别脑裂时没有主设备，disconnect 表示不自动恢复，只调用 split-brain 处理程序脚本
+### after-sb-1pri: 识别脑裂时1个主设备
+### after-sb-2pri: 识别脑裂时2个主设备
+$ sudo vi /usr/local/etc/drbd.d/global_common.conf
+global {
+    usage-count no;
+}
+common {
+    handlers {
+        # split-brain "/usr/lib/drbd/notify-split-brain.sh root";
+    }
+    options {
+        auto-promote yes;
+    }
+    disk {
+        on-io-error detach;
+    }
+    net {
+        protocol C;
+        verify-alg md5;
+        after-sb-0pri disconnect;
+        after-sb-1pri disconnect;
+        after-sb-2pri disconnect;
+    }
+}
+```
+
+- [【文档】drbd-9.0: 2.3 DRBD 复制模式](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-replication-protocols)
+- [【文档】drbd-9.0: 4.13 配置 I/O 错误处理策略](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-configure-io-error-behavior)
+- [【文档】drbd-9.0: 4.9 使用在线设备验证](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-use-online-verify)
+- [【文档】drbd-9.0: 4.17 配置裂脑行为](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-configure-split-brain-behavior)
+
+```bash
+### *.res 资源配置文件，每个资源可以由多个卷组成
+### node-id: 节点ID
+### volume: 卷ID
+### device minor: udev 的次设备号，drbd 的主设备号为147，每个次设备号代表一个 volume
+### disk: 卷对应的磁盘
+### meta-disk: 元数据存放位置
+### connection: 连接关系
+$ sudo vi /usr/local/etc/drbd.d/r0.res
+resource "r0" {
+    on "kylin-gw101" {
+        node-id 0;
+        volume 0 {
+            device minor 0;
+            disk "/dev/disk/by-id/scsi-355cd2e41534cb4fe";
+            meta-disk internal;
+        }
+        volume 1 {
+            device minor 1;
+            disk "/dev/sdb";
+            meta-disk internal;
+        }
+    }
+    on "kylin-gw102" {
+        node-id 1;
+        volume 0 {
+            device minor 0;
+            disk "/dev/disk/by-id/scsi-355cd2e41534cb509";
+            meta-disk internal;
+        }
+        volume 1 {
+            device minor 1;
+            disk "/dev/sdb";
+            meta-disk internal;
+        }
+    }
+    connection {
+        host "kylin-gw101" address 10.0.1.101:7789;
+        host "kylin-gw102" address 10.0.1.102:7789;
+    }
+}
+```
+
+- [【文档】drbd-9.0: 4.1.3 配置资源](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-configure-resource)
+- [【文档】drbd-9.0: 1.3 资源](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-resources)
+- [【手册】Linux 分配的设备（4.x+ 版本）](https://www.kernel.org/doc/html/latest/admin-guide/devices.html)
+- [【文档】drbd-9.0: 4.1.4 定义网络连接](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-drbdconf-conns)
+
+## 启动 drbd 进行数据同步
+
+```bash
+### 两节点均需操作
+### 创建设备元数据
+$ sudo drbdadm create-md r0
+initializing activity log
+initializing bitmap (35772 KB) to all zero
+Writing meta data...
+New drbd meta data block successfully created.
+### 两节点均需操作
+### 启动 drbd
+$ sudo drbdadm up r0
+```
+
+```bash
+### 设定当前资源为初始化资源，并进行同步。
+### 原理：生成新 GI, 并将 bitmap 全部置 1
+$ sudo drbdadm primary --force r0
+### 跳过初始同步，仅在节点间均无有用数据时使用
+### 原理：生成新 GI, 并将 bitmap 全部置0
+$ sudo drbdadm new-current-uuid --clear-bitmap r0/0
+$ sudo drbdadm new-current-uuid --clear-bitmap r0/1
+```
+
+- [【文档】drbd-9.0: 4.1.7 首次启用资源](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-first-time-up)
+- [【文档】drbd-9.0: 4.1.8 初始设备同步](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-initial-full-sync)
+- [【文档】drbd-9.0: 4.1.9 跳过初始重新同步](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-skip-initial-resync)
+
+## 监控 drbd 状态
+
+```bash
+### 基本监控
+$ drbdadm status
+r0 role:Secondary
+  volume:0 disk:UpToDate
+  volume:1 disk:UpToDate
+  kylin-gw102 role:Secondary
+    volume:0 peer-disk:UpToDate
+    volume:1 peer-disk:UpToDate
+### 详细数据监控
+### read: 读取本地磁盘的数据量(KiB)
+### written: 写入本地磁盘的数据量(KiB)
+### al-writes: 活动日志区域的更新次数
+### bm-writes: 位图区域的更新次数
+### upper-pending: 转发给 DRBD 但 DRBD 尚未回答（完成）的块 I/O 请求数
+### lower-pending: DRBD 向本地 I/O 子系统发出的打开请求数
+### ap-in-flight: application in-flight, 飞行中的应用程序数据，已将其发送给对等方并正在等待其已写入的确认数(扇区，512B)
+### rs-in-flight: resync in-flight, 飞行中的重新同步数据，已将其发送给对等方并正在等待其已写入的确认数(扇区，512B)
+### resync-suspended: 重新同步暂停
+### received: 从网络中收到的数据(KiB)
+### sent: 向网络中发送的数据(KiB)
+### out-of-sync: 根据位图计算出的不同步数据(KiB)
+### pending: 发送到对等方但尚未被对等方确认的请求数
+### unacked: 从对等方接收到但尚未被该节点上确认的请求数
+$ drbdsetup status --verbose --statistics
+r0 node-id:1 role:Primary suspended:no
+    write-ordering:flush
+  volume:0 minor:0 disk:UpToDate backing_dev:/dev/sda quorum:yes
+      size:937663848 read:11465 written:953378148 al-writes:11101 bm-writes:0 upper-pending:0 lower-pending:0 al-suspended:no blocked:no
+  volume:1 minor:1 disk:UpToDate backing_dev:/dev/sdb quorum:yes
+      size:937663848 read:0 written:0 al-writes:0 bm-writes:0 upper-pending:0 lower-pending:0 al-suspended:no blocked:no
+  kylin-gw101 node-id:0 connection:Connected role:Secondary congested:no ap-in-flight:0 rs-in-flight:0
+    volume:0 replication:Established peer-disk:UpToDate resync-suspended:no
+        received:0 sent:14304 out-of-sync:0 pending:0 unacked:0
+    volume:1 replication:Established peer-disk:UpToDate resync-suspended:no
+        received:0 sent:0 out-of-sync:0 pending:0 unacked:0
+
+### 连接状态监控
+$ drbdsetup events2 --statistics
+```
+
+- [【文档】drbd-9.0: 4.2.3 使用 DRBD 管理工具检索状态信息](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-drbdadm-status)
+- [【文档】drbd-9.0: 4.2.4 使用 DRBD 设置命令检索状态信息](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-drbdsetup-events2)
+- [【文档】drbd-9.0: 4.2.10 性能指标](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-performance-indicators)
+
+## 运维命令
+
+### 资源角色手动切换
+
+```bash
+### 主备手动切换，auto-promote 为 no 时需要使用
+### 降级
+$ sudo drbdadm secondary r0
+### 升级
+$ sudo drbdadm primary r0
+```
+
+- [【文档】drbd-9.0: 4.5 提升和降级资源](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-switch-resource-roles)
+
+### 在线设备验证
+
+```bash
+### verify: 在线验证，会将不同的块记入 bitmap
+$ sudo drbdadm verify <resource>:<peer>/<volume>
+### 使用远程覆盖本地差异
+### invalidate --reset-bitmap: bitmap 的不同步 flag 置位，但 bitmap 不动。通常用在验证后的不同步，可以根据 bitmap 减少同步时间
+$ sudo drbdadm invalidate <resource>:<peer>/volume --reset-bitmap=no
+### 使用本地覆盖远程差异
+$ sudo drbdadm invalidate-remote <resource>:<peer>/volume --reset-bitmap=no
+```
+
+- [【文档】drbd-9.0: 4.9 使用在线设备验证](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-use-online-verify)
+
+### 运行时修改配置
+
+```bash
+### 修改 /etc/drbd.conf 后执行
+$ sudo drbdadm adjust <resource>
+```
+
+- [【文档】drbd-9.0: 4.4 重新配置资源](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#s-reconfigure)
+
+### 处理硬盘故障
+
+```bash
+### 分离块设备，分离之后，该节点为无盘模式
+$ sudo drbdadm detach <resource>
+### 换盘，重建元数据
+$ sudo drbdadm create-md <resource>
+### 添加块设备
+$ sudo drbdadm attach <resource>
+### 外部元数据才需要执行
+### invalidate: 将 bitmap 全部置位，bitmap 的不同步 flag 置位，用于全盘同步
+$ sudo drbdadm invalidate <resource>
+```
+
+### 处理脑裂恢复
+
+```bash
+### 脑裂丢弃数据方
+$ sudo drbdadm disconnect r0
+$ sudo drbdadm secondary r0
+### --discard-my-data: 将 bitmap 的不同步、过期 flag 置位
+$ sudo drbdadm connect --discard-my-data r0
+### 脑裂保留数据方
+$ sudo drbdadm disconnect r0
+$ sudo drbdadm connect r0
+```
+
+裂脑受害者不会受到完整的设备同步。相反，它会回滚其本地修改，并且对裂脑幸存者所做的任何修改都会传播给受害者。
+
+- [【文档】drbd-9.0: 6. 故障排除和错误恢复](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/#ch-troubleshooting)
+
+### 删除 drbd
+
+```bash
+### 停止 drbd 服务
+$ sudo drbdadm down r0
+### 擦除元数据
+$ sudo drbdadm wipe-md r0/0
+$ sudo drbdadm wipe-md r0/1
+```
+
+## 显示元数据
+
+```bash
+$ sudo drbdadm detach r0/1
+$ sudo drbdadm apply-al r0/1
+### 等效 sudo drbdmeta 1 v09 /dev/sdb internal dump-md
+$ sudo drbdadm dump-md r0/1
+# DRBD meta data dump
+# 2022-04-26 18:59:33 +0800 [1650970773]
+# kylin-gw102> drbdmeta 1 v09 /dev/sdb internal dump-md
+#
+
+version "v09";
+
+max-peers 1;
+# md_size_sect 57312
+# md_offset 960197120000
+# al_offset 960197087232
+# bm_offset 960167780352
+
+node-id 1;
+current-uuid 0x1838481B8FDA7D3A;
+flags 0x00000091;
+peer[0] {
+    bitmap-index 0;
+    bitmap-uuid 0x0000000000000000;
+    bitmap-dagtag 0x0000000000000000;
+    flags 0x00000011; # connected | seen
+}
+peer[1] {
+    bitmap-index -1;
+    bitmap-uuid 0x0000000000000000;
+    bitmap-dagtag 0x0000000000000000;
+    flags 0x00010000; # exists
+}
+......
+......
+......
+peer[31] {
+    bitmap-index -1;
+    bitmap-uuid 0x0000000000000000;
+    bitmap-dagtag 0x0000000000000000;
+    flags 0x00010000; # exists
+}
+history-uuids {
+        0xA1B2984F1F8C5A4A; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+        0x0000000000000000; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+        0x0000000000000000; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+        0x0000000000000000; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+        0x0000000000000000; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+        0x0000000000000000; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+        0x0000000000000000; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+        0x0000000000000000; 0x0000000000000000; 0x0000000000000000; 0x0000000000000000;
+}
+# al-extents 1237;
+la-size-sect 1875327696;
+bm-byte-per-bit 4096;
+device-uuid 0x91DA990DB08397F5;
+la-peer-max-bio-size 1048576;
+al-stripes 1;
+al-stripe-size-4k 8;
+# bm-bytes 29302784;
+bitmap[0] {
+   # at 0kB
+    3662848 times 0x0000000000000000;
+}
+# bits-set 0;
+$ sudo drbdadm attach r0/1
+```
+
+## 性能测试
+
+### dd 测试
+
+```bash
+### dd 带宽测试脚本
+### oflag=direct: 跳过缓存，直接写入磁盘
+### dd 默认使用同步 io
+TEST_RESOURCE=r0
+TEST_DEVICE=$(drbdadm sh-dev $TEST_RESOURCE | head -1)
+TEST_LL_DEVICE=$(drbdadm sh-ll-dev $TEST_RESOURCE | head -1)
+drbdadm primary $TEST_RESOURCE
+for i in $(seq 5); do
+    dd if=/dev/zero of=$TEST_DEVICE bs=1M count=512 oflag=direct
+done
+drbdadm down $TEST_RESOURCE
+for i in $(seq 5); do
+    dd if=/dev/zero of=$TEST_LL_DEVICE bs=1M count=512 oflag=direct
+done
+### dd 带宽测试结果
+536870912 bytes (537 MB, 512 MiB) copied, 5.57117 s, 96.4 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 5.40092 s, 99.4 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 5.40026 s, 99.4 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 5.39415 s, 99.5 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 5.31265 s, 101 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 1.31723 s, 408 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 1.24486 s, 431 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 1.22568 s, 438 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 1.22277 s, 439 MB/s
+536870912 bytes (537 MB, 512 MiB) copied, 1.22082 s, 440 MB/s
+```
+```bash
+### dd 延迟测试脚本
+TEST_RESOURCE=r0
+TEST_DEVICE=$(drbdadm sh-dev $TEST_RESOURCE | head -1)
+TEST_LL_DEVICE=$(drbdadm sh-ll-dev $TEST_RESOURCE | head -1)
+drbdadm primary $TEST_RESOURCE
+dd if=/dev/zero of=$TEST_DEVICE bs=4k count=1000 oflag=direct
+drbdadm down $TEST_RESOURCE
+dd if=/dev/zero of=$TEST_LL_DEVICE bs=4k count=1000 oflag=direct
+### dd 延迟测试结果
+4096000 bytes (4.1 MB, 3.9 MiB) copied, 0.630577 s, 6.5 MB/s
+4096000 bytes (4.1 MB, 3.9 MiB) copied, 0.0481583 s, 85.1 MB/s
+```
+
+#### 结论
+
+1. drbd 的写入速率受到千兆网带宽的限制，最大为 101 MB/s。
+2. drbd 的写入速率受到千兆网延迟的限制，单次 io 周期为 630us 左右。
+
+### fio 测试
+
+```ini
+[global]
+direct=1
+thread=1
+filename=/dev/sda
+size=8G
+numjobs=1
+runtime=20
+
+[128k 32depth read]
+ioengine=libaio
+iodepth=32
+bs=128k
+rw=read
+stonewall
+
+[128k 32depth write]
+ioengine=libaio
+iodepth=32
+bs=128k
+rw=write
+stonewall
+
+[4k 32depth randread]
+ioengine=libaio
+iodepth=32
+bs=4k
+rw=randread
+stonewall
+
+[4k 32depth randwrite]
+ioengine=libaio
+iodepth=32
+bs=4k
+rw=randwrite
+stonewall
+
+[128k 1depth read]
+ioengine=psync
+iodepth=1
+bs=128k
+rw=read
+stonewall
+
+[128k 1depth write]
+ioengine=psync
+iodepth=1
+bs=128k
+rw=write
+stonewall
+
+[4k 1depth randread]
+ioengine=psync
+iodepth=1
+bs=4k
+rw=randread
+stonewall
+
+[4k 1depth randwrite]
+ioengine=psync
+iodepth=1
+bs=4k
+rw=randwrite
+stonewall
+```
+
+|序号|   iodepth=32  |  sda blk | sda ext4 |  sda xfs |  drbd blk | drbd ext4 |  drbd xfs |
+|:-:| :------------: | -------: | -------: | -------: | --------: | --------: | --------: |
+| ① | 128k read      | 504MiB/s | 484MiB/s | 500MiB/s |  506MiB/s |  482MiB/s |  504MiB/s |
+| ② | 128k write     | 453MiB/s | 439MiB/s | 455MiB/s |  112MiB/s |  112MiB/s |  112MiB/s |
+| ③ |   4k randread  |    62.9k |    54.6k |    57.7k |     50.7k |     44.9k |     47.0k |
+| ④ |   4k randwrite |    53.4k |    49.7k |    45.0k |     24.3k |     22.1k |     23.1k |
+
+|序号|   iodepth=1   |  sda blk | sda ext4 |  sda xfs |  drbd blk | drbd ext4 |  drbd xfs |
+|:-:| :------------: | -------: | -------: | -------: | --------: | --------: | --------: |
+| ⑤ | 128k read      | 321MiB/s | 301MiB/s | 327MiB/s |  327MiB/s |  313MiB/s |  335MiB/s |
+| ⑥ | 128k write     | 374MiB/s | 361MiB/s | 377MiB/s | 72.1MiB/s | 70.3MiB/s | 72.6MiB/s |
+| ⑦ |   4k randread  |     8.5k |     8.3k |     8.7k |      8.3k |      8.1k |      8.4k |
+| ⑧ |   4k randwrite |    19.5k |    19.1k |    20.7k |      2.3k |      2.2k |      2.3k |
+
+### 结论：
+
+drbd 存储相对宿主资源
+1. ①,⑤,⑦号测试：基本没有衰减，可以初步判断 drbd 先从本地资源获取数据
+2. 主要受到 drbd 内核驱动延迟的影响：
+- ③号测试：应用数据 4k 随机读取 io 最大 50.7k，衰减 20%
+3. 主要受到千兆网带宽的影响：
+- ②号测试：应用数据最大写入速率 112MiB/s ，衰减 75%
+- ④号测试：应用数据最大 iops 24.3k，衰减 55%
+4. 主要受到千兆网延迟的影响：
+- ⑥号测试：数据库数据最大写入速率 72.6MiB/s，衰减为 80% 
+- ⑧号测试：数据库数据 io 平均延迟在 500us 以内，衰减 88%
+
+## 帮助文档
+
+```bash
+$ man drbdadm
+$ man drbdadm-9.0
+$ man drbdsetup
+$ man drbdsetup-9.0
+```
+
+## 参考资料
+
+1. [【主页】LINBIT](https://linbit.com/)
+2. [【文档】DRBD9 用户指南](https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/)
+3. [【源码】drdb gitHub 仓库](https://github.com/LINBIT/drbd)
+4. [【博客】DRBD详细解说及配置过程记录](https://www.cnblogs.com/kevingrace/p/5740940.html)
+5. [【博客】分布式块设备复制技术DRBD的简单实践](https://baijiahao.baidu.com/s?id=1690549615151869080&wfr=spider&for=pc)
+6. [【博客】DRBD meta data信息的删除,创建,导出](http://www.linuxmysql.com/16/2016/182.htm)
