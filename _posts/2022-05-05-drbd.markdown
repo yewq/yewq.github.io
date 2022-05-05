@@ -1,4 +1,9 @@
-# drbd
+---
+layout: post
+title:  "DRBD"
+date:   2022-05-05 21:25:27 +0800
+categories: linux
+---
 
 `DRDB`: Distributed Replicated Block Device, 分布式复制块设备。在主机之间镜像块设备，相当于网络 RAID 1。
 
