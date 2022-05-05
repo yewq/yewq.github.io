@@ -50,6 +50,7 @@ categories: linux
 > ![开始新的数据生成](https://linbit.com/wp-content/uploads/drbd/users-guide-drbd-8-4/images/gi-changes-newgen.png)  
 > ![开始重新同步](https://linbit.com/wp-content/uploads/drbd/users-guide-drbd-8-4/images/gi-changes-syncstart.png)  
 > ![完成重新同步](https://linbit.com/wp-content/uploads/drbd/users-guide-drbd-8-4/images/gi-changes-synccomplete.png)  
+
 `AL`: Activity Log, 活动日志。在主节点写入数据时，标识需要写入的块为活动块。一个活动日志由32bit地址组成，每个地址代表4MiB的范围。主要用作是在主节点写数据时，节点间因网络等原因不能保证完全同步块；此时主节点突然临时断线，数据只在本地，远端没有任何记录数据；下次再加入集群时，就可以根据 AL 快速回滚这些还没有完全同步的块。
 
 `bitmap`: 位图。在节点间断开连接后工作，标识节点间的不同的块。在内存中实现，每bit映射4KiB扇区。当 AL 标记为非活动区后写入磁盘，避免了频繁写入。
