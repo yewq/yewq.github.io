@@ -1,0 +1,384 @@
+---
+layout: post
+title:  "Time Series Benchmark Suite"
+date:   2022-05-15 12:24:57 +0800
+categories: linux
+---
+
+`tsbs`: Time Series Benchmark Suite, 时间序列测试套件。可以测试常见的时间序列数据库性能。
+
+测试主要分为两部分：
+1. 写入压力测试：生成测试数据，写入测试数据，观察写入速率。
+2. 查询压力测试：生成查询语句，执行查询操作，观察查询速率。
+
+【目录】
+- [编译](#编译)
+- [数据生成](#数据生成)
+- [数据写入](#数据写入)
+- [查询生成](#查询生成)
+- [执行查询](#执行查询)
+- [参考资料](#参考资料)
+- [附录 A 数据生成样例](#附录-a-数据生成样例)
+- [附录 B 数据写入样例](#附录-b-数据写入样例)
+- [附录 C 执行查询样例](#附录-c-执行查询样例)
+
+## 编译
+
+```bash
+### 需要提前安装 go 编译环境
+$ git clone https://github.com/timescale/tsbs.git
+$ cd tsbs
+$ make
+$ cd bin
+```
+
+- [【文档】TSBS: 安装](https://github.com/timescale/tsbs#installation)
+
+## 数据生成
+
+```bash
+### --use-case: 生成序列的模拟样例，devops, cpu-only, iot 三种可选。其中 cpu-only 每时刻 10 个序列。
+### --seed: 伪随机数生成器种子
+### --scale: 设备数，即时间序列会包含 hostname 标签
+### --timestamp-start: 开始时间
+### --timestamp-end: 结束时间
+### --log-interval: 间隔时间
+### --format: 生成序列的格式，cassandra, clickhouse, cratedb, influx, mongo, questdb, siridb, timescaledb, victoriametrics, 共九种可选
+### --file: 生成数据保存路径
+### 示例共 3*3=9 行， 9*10=90 个时间序列数据
+$ /home/yewq/tsbs/tsbs/bin/tsbs_generate_data \
+  --use-case="cpu-only" \
+  --seed=123 \
+  --scale=3 \
+  --timestamp-start="2022-04-01T00:00:00Z" \
+  --timestamp-end="2022-04-01T00:00:30Z" \
+  --log-interval="10s" \
+  --format="influx" \
+  --file="/home/yewq/tsbs/influxdata"
+### 压缩生成数据,共 4000*3*24*360=103,680,000 行，每行 10 个序列，共 1,036,800,000 个数据。
+$ /home/yewq/tsbs/tsbs/bin/tsbs_generate_data \
+  --use-case="cpu-only" \
+  --seed=123 \
+  --scale=4000 \
+  --timestamp-start="2022-04-01T00:00:00Z" \
+  --timestamp-end="2022-04-04T00:00:00Z" \
+  --log-interval="10s" \
+  --format="influx" \
+  | gzip > /home/yewq/tsbs/influxdata.gz
+```
+
+- [【文档】TSBS: 数据生成](https://github.com/timescale/tsbs#data-generation)
+
+## 数据写入
+
+可以在写入数据时动态生成数据，但生成速率可能跟不上写入速率，会影响测试性能。所以建议先进行数据生成，再使用生成数据进行写入。
+
+```bash
+### tsbs_load_influx: influx 写入软件
+### --urls: 数据库写入监听地址
+### --file: 待写入数据路径
+### --workers: 同时写入的客户端数量
+$ /home/yewq/tsbs/tsbs/bin/tsbs_load_influx \
+  --urls="http://10.0.1.102:8428" \
+  --file="/home/yewq/tsbs/influxdata"
+### 从压缩数据中写入
+$ cat /home/yewq/tsbs/influxdata.gz \
+  | gunzip \
+  | /home/yewq/tsbs/tsbs/bin/tsbs_load_influx \
+  --urls="http://10.0.1.102:8428" \
+  --workers=64
+```
+
+- [【文档】TSBS: 数据写入](https://github.com/timescale/tsbs#using-the-database-specific-tsbs_load_-executables)
+- [【文档】TSBS InfluxDB 补充指南： 数据写入](https://github.com/timescale/tsbs/blob/master/docs/influx.md#tsbs_load_influx-additional-flags)
+
+## 查询生成
+
+```bash
+### --queries: 查询次数
+### --query-type: 查询类型，double-groupby-1 类型代表查询所有主机标签的一个 cpu 序列集合，时间范围24小时，时间间隔1小时。
+$ /home/yewq/tsbs/tsbs/bin/tsbs_generate_queries \
+  --use-case="cpu-only" \
+  --seed=123 \
+  --scale=4000 \
+  --timestamp-start="2022-04-01T00:00:00Z" \
+  --timestamp-end="2022-04-04T00:00:00Z" \
+  --queries=1000 \
+  --query-type="double-groupby-1" \
+  --format="victoriametrics" \
+  | gzip > /home/yewq/tsbs/victoriametricsquery.gz
+VictoriaMetrics mean of 1 metrics, all hosts, random 12h0m0s by 1h: 1000 points
+```
+
+- [【文档】TSBS: 查询生成](https://github.com/timescale/tsbs#query-generation)
+- [【文档】TSBS: 查询类型](https://github.com/timescale/tsbs#devops--cpu-only)
+
+## 执行查询
+
+```
+$ cat /home/yewq/tsbs/victoriametricsquery.gz \
+  | gunzip \
+  | /home/yewq/tsbs/tsbs/bin/tsbs_run_queries_victoriametrics \
+  --urls="http://10.0.1.102:8428" \
+  --workers=8
+```
+
+- [【文档】TSBS VictoriaMetrics 补充指南： 执行查询](https://github.com/timescale/tsbs/blob/master/docs/victoriametrics.md#tsbs_run_queries_victoriametrics)
+
+## 参考资料
+
+1. [【源码】tsbs github 仓库](https://github.com/timescale/tsbs)
+2. [【博客】测量 Google Cloud 中时间序列数据库的垂直可扩展性](https://valyala.medium.com/measuring-vertical-scalability-for-time-series-databases-in-google-cloud-92550d78d8ae)
+
+## 附录 A 数据生成样例
+
+- `--format`: influx, questdb, victoriametrics 均相同：
+
+```ini
+cpu,hostname=host_0,region=eu-central-1,datacenter=eu-central-1a,rack=6,os=Ubuntu15.10,arch=x86,team=SF,service=19,service_version=1,service_environment=test usage_user=58i,usage_system=2i,usage_idle=24i,usage_nice=61i,usage_iowait=22i,usage_irq=63i,usage_softirq=6i,usage_steal=44i,usage_guest=80i,usage_guest_nice=38i 1648771200000000000
+cpu,hostname=host_1,region=us-west-1,datacenter=us-west-1a,rack=41,os=Ubuntu15.10,arch=x64,team=NYC,service=9,service_version=1,service_environment=staging usage_user=84i,usage_system=11i,usage_idle=53i,usage_nice=87i,usage_iowait=29i,usage_irq=20i,usage_softirq=54i,usage_steal=77i,usage_guest=53i,usage_guest_nice=74i 1648771200000000000
+cpu,hostname=host_2,region=sa-east-1,datacenter=sa-east-1a,rack=89,os=Ubuntu16.04LTS,arch=x86,team=LON,service=13,service_version=0,service_environment=staging usage_user=29i,usage_system=48i,usage_idle=5i,usage_nice=63i,usage_iowait=17i,usage_irq=52i,usage_softirq=60i,usage_steal=49i,usage_guest=93i,usage_guest_nice=1i 1648771200000000000
+cpu,hostname=host_0,region=eu-central-1,datacenter=eu-central-1a,rack=6,os=Ubuntu15.10,arch=x86,team=SF,service=19,service_version=1,service_environment=test usage_user=58i,usage_system=3i,usage_idle=24i,usage_nice=60i,usage_iowait=25i,usage_irq=62i,usage_softirq=7i,usage_steal=45i,usage_guest=81i,usage_guest_nice=37i 1648771210000000000
+cpu,hostname=host_1,region=us-west-1,datacenter=us-west-1a,rack=41,os=Ubuntu15.10,arch=x64,team=NYC,service=9,service_version=1,service_environment=staging usage_user=83i,usage_system=11i,usage_idle=54i,usage_nice=88i,usage_iowait=28i,usage_irq=20i,usage_softirq=53i,usage_steal=76i,usage_guest=54i,usage_guest_nice=74i 1648771210000000000
+cpu,hostname=host_2,region=sa-east-1,datacenter=sa-east-1a,rack=89,os=Ubuntu16.04LTS,arch=x86,team=LON,service=13,service_version=0,service_environment=staging usage_user=31i,usage_system=47i,usage_idle=5i,usage_nice=64i,usage_iowait=18i,usage_irq=51i,usage_softirq=60i,usage_steal=50i,usage_guest=90i,usage_guest_nice=0i 1648771210000000000
+cpu,hostname=host_0,region=eu-central-1,datacenter=eu-central-1a,rack=6,os=Ubuntu15.10,arch=x86,team=SF,service=19,service_version=1,service_environment=test usage_user=57i,usage_system=3i,usage_idle=23i,usage_nice=57i,usage_iowait=26i,usage_irq=64i,usage_softirq=5i,usage_steal=46i,usage_guest=80i,usage_guest_nice=38i 1648771220000000000
+cpu,hostname=host_1,region=us-west-1,datacenter=us-west-1a,rack=41,os=Ubuntu15.10,arch=x64,team=NYC,service=9,service_version=1,service_environment=staging usage_user=82i,usage_system=11i,usage_idle=53i,usage_nice=90i,usage_iowait=27i,usage_irq=21i,usage_softirq=54i,usage_steal=74i,usage_guest=55i,usage_guest_nice=74i 1648771220000000000
+cpu,hostname=host_2,region=sa-east-1,datacenter=sa-east-1a,rack=89,os=Ubuntu16.04LTS,arch=x86,team=LON,service=13,service_version=0,service_environment=staging usage_user=31i,usage_system=47i,usage_idle=6i,usage_nice=63i,usage_iowait=16i,usage_irq=50i,usage_softirq=61i,usage_steal=49i,usage_guest=91i,usage_guest_nice=0i 1648771220000000000
+```
+
+- `--format`: timescaledb
+
+```ini
+cpu,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice
+
+tags,hostname=host_0,region=eu-central-1,datacenter=eu-central-1a,rack=6,os=Ubuntu15.10,arch=x86,team=SF,service=19,service_version=1,service_environment=test
+cpu,1648771200000000000,58,2,24,61,22,63,6,44,80,38
+tags,hostname=host_1,region=us-west-1,datacenter=us-west-1a,rack=41,os=Ubuntu15.10,arch=x64,team=NYC,service=9,service_version=1,service_environment=staging
+cpu,1648771200000000000,84,11,53,87,29,20,54,77,53,74
+tags,hostname=host_2,region=sa-east-1,datacenter=sa-east-1a,rack=89,os=Ubuntu16.04LTS,arch=x86,team=LON,service=13,service_version=0,service_environment=staging
+cpu,1648771200000000000,29,48,5,63,17,52,60,49,93,1
+tags,hostname=host_0,region=eu-central-1,datacenter=eu-central-1a,rack=6,os=Ubuntu15.10,arch=x86,team=SF,service=19,service_version=1,service_environment=test
+cpu,1648771210000000000,58,3,24,60,25,62,7,45,81,37
+tags,hostname=host_1,region=us-west-1,datacenter=us-west-1a,rack=41,os=Ubuntu15.10,arch=x64,team=NYC,service=9,service_version=1,service_environment=staging
+cpu,1648771210000000000,83,11,54,88,28,20,53,76,54,74
+tags,hostname=host_2,region=sa-east-1,datacenter=sa-east-1a,rack=89,os=Ubuntu16.04LTS,arch=x86,team=LON,service=13,service_version=0,service_environment=staging
+cpu,1648771210000000000,31,47,5,64,18,51,60,50,90,0
+tags,hostname=host_0,region=eu-central-1,datacenter=eu-central-1a,rack=6,os=Ubuntu15.10,arch=x86,team=SF,service=19,service_version=1,service_environment=test
+cpu,1648771220000000000,57,3,23,57,26,64,5,46,80,38
+tags,hostname=host_1,region=us-west-1,datacenter=us-west-1a,rack=41,os=Ubuntu15.10,arch=x64,team=NYC,service=9,service_version=1,service_environment=staging
+cpu,1648771220000000000,82,11,53,90,27,21,54,74,55,74
+tags,hostname=host_2,region=sa-east-1,datacenter=sa-east-1a,rack=89,os=Ubuntu16.04LTS,arch=x86,team=LON,service=13,service_version=0,service_environment=staging
+cpu,1648771220000000000,31,47,6,63,16,50,61,49,91,0
+```
+
+## 附录 B 数据写入样例
+
+```bash
+### 写入 VictoriaMetrics 提供的 influx 接口，可达到 2M/s 的写入速率，服务端 cpu 遇到瓶颈，5000%以上的 cpu 使用率。 
+$ cat /home/yewq/tsbs/influxdata.gz \
+>   | gunzip \
+>   | /home/yewq/tsbs/tsbs/bin/tsbs_load_influx \
+>   --urls="http://10.0.1.102:8428" \
+>   --workers=64
+time,per. metric/s,metric total,overall metric/s,per. row/s,row total,overall row/s
+1652233657,1577065.09,1.580000E+07,1577065.09,157706.51,1.580000E+06,157706.51
+1652233667,2534544.45,4.110000E+07,2054930.15,253454.45,4.110000E+06,205493.01
+1652233677,2499881.90,6.610000E+07,2203248.71,249988.19,6.610000E+06,220324.87
+1652233687,2590203.87,9.200000E+07,2299979.00,259020.39,9.200000E+06,229997.90
+1652233697,2552773.33,1.176000E+08,2350651.93,255277.33,1.176000E+07,235065.19
+1652233707,2456780.03,1.421000E+08,2368290.82,245678.00,1.421000E+07,236829.08
+1652233717,2519483.53,1.673000E+08,2389893.24,251948.35,1.673000E+07,238989.32
+1652233727,2560660.13,1.929000E+08,2411233.45,256066.01,1.929000E+07,241123.35
+1652233737,2567918.55,2.186000E+08,2428655.34,256791.85,2.186000E+07,242865.53
+1652233747,2491902.64,2.435000E+08,2434975.18,249190.26,2.435000E+07,243497.52
+1652233757,2545508.58,2.690000E+08,2445039.69,254550.86,2.690000E+07,244503.97
+1652233767,2483927.75,2.938000E+08,2448275.16,248392.78,2.938000E+07,244827.52
+1652233777,2340452.00,3.172000E+08,2439982.73,234045.20,3.172000E+07,243998.27
+1652233787,2440086.70,3.416000E+08,2439990.16,244008.67,3.416000E+07,243999.02
+1652233797,1939888.27,3.610000E+08,2406648.37,193988.83,3.610000E+07,240664.84
+1652233807,2529972.99,3.863000E+08,2414356.18,252997.30,3.863000E+07,241435.62
+1652233817,2470213.26,4.110000E+08,2417641.60,247021.33,4.110000E+07,241764.16
+1652233827,2449659.49,4.355000E+08,2419420.60,244965.95,4.355000E+07,241942.06
+1652233837,2490385.59,4.604000E+08,2423155.02,249038.56,4.604000E+07,242315.50
+1652233847,2475444.72,4.852000E+08,2425774.07,247544.47,4.852000E+07,242577.41
+1652233857,2513632.77,5.103000E+08,2429951.69,251363.28,5.103000E+07,242995.17
+1652233867,2470362.75,5.350000E+08,2431788.26,247036.28,5.350000E+07,243178.83
+1652233877,2515998.32,5.602000E+08,2435455.09,251599.83,5.602000E+07,243545.51
+1652233887,2444239.52,5.846000E+08,2435820.48,244423.95,5.846000E+07,243582.05
+1652233897,2440073.71,6.090000E+08,2435990.60,244007.37,6.090000E+07,243599.06
+1652233907,2518076.52,6.342000E+08,2439150.06,251807.65,6.342000E+07,243915.01
+1652233917,2451345.73,6.587000E+08,2439601.50,245134.57,6.587000E+07,243960.15
+1652233927,2508512.99,6.838000E+08,2442064.00,250851.30,6.838000E+07,244206.40
+1652233937,1831469.77,7.021000E+08,2421026.00,183146.98,7.021000E+07,242102.60
+1652233947,2478111.68,7.269000E+08,2422930.25,247811.17,7.269000E+07,242293.02
+1652233957,2522033.01,7.521000E+08,2426124.53,252203.30,7.521000E+07,242612.45
+1652233967,2507979.38,7.772000E+08,2428684.48,250797.94,7.772000E+07,242868.45
+1652233977,2440657.61,8.016000E+08,2429047.20,244065.76,8.016000E+07,242904.72
+1652233987,2460799.08,8.262000E+08,2429980.77,246079.91,8.262000E+07,242998.08
+1652233997,2490488.62,8.511000E+08,2431709.22,249048.86,8.511000E+07,243170.92
+1652234007,2490083.23,8.760000E+08,2433330.67,249008.32,8.760000E+07,243333.07
+1652234017,2530033.86,9.013000E+08,2435944.23,253003.39,9.013000E+07,243594.42
+1652234027,2419803.91,9.255000E+08,2435519.45,241980.39,9.255000E+07,243551.95
+1652234037,2529971.24,9.508000E+08,2437941.31,252997.12,9.508000E+07,243794.13
+1652234047,2440244.09,9.752000E+08,2437998.88,244024.41,9.752000E+07,243799.89
+1652234057,2489219.99,1.000100E+09,2439248.55,248922.00,1.000100E+08,243924.86
+1652234067,2470527.43,1.024800E+09,2439993.13,247052.74,1.024800E+08,243999.31
+[worker 4] backoffs took a total of 0.000000sec of runtime
+[worker 47] backoffs took a total of 0.000000sec of runtime
+[worker 6] backoffs took a total of 0.000000sec of runtime
+[worker 38] backoffs took a total of 0.000000sec of runtime
+[worker 20] backoffs took a total of 0.000000sec of runtime
+[worker 56] backoffs took a total of 0.000000sec of runtime
+[worker 40] backoffs took a total of 0.000000sec of runtime
+[worker 53] backoffs took a total of 0.000000sec of runtime
+[worker 19] backoffs took a total of 0.000000sec of runtime
+[worker 33] backoffs took a total of 0.000000sec of runtime
+[worker 39] backoffs took a total of 0.000000sec of runtime
+[worker 28] backoffs took a total of 0.000000sec of runtime
+[worker 16] backoffs took a total of 0.000000sec of runtime
+[worker 54] backoffs took a total of 0.000000sec of runtime
+[worker 18] backoffs took a total of 0.000000sec of runtime
+[worker 21] backoffs took a total of 0.000000sec of runtime
+[worker 9] backoffs took a total of 0.000000sec of runtime
+[worker 63] backoffs took a total of 0.000000sec of runtime
+[worker 13] backoffs took a total of 0.000000sec of runtime
+[worker 50] backoffs took a total of 0.000000sec of runtime
+[worker 42] backoffs took a total of 0.000000sec of runtime
+[worker 26] backoffs took a total of 0.000000sec of runtime
+[worker 34] backoffs took a total of 0.000000sec of runtime
+[worker 11] backoffs took a total of 0.000000sec of runtime
+[worker 29] backoffs took a total of 0.000000sec of runtime
+[worker 43] backoffs took a total of 0.000000sec of runtime
+[worker 37] backoffs took a total of 0.000000sec of runtime
+[worker 62] backoffs took a total of 0.000000sec of runtime
+[worker 27] backoffs took a total of 0.000000sec of runtime
+[worker 7] backoffs took a total of 0.000000sec of runtime
+[worker 3] backoffs took a total of 0.000000sec of runtime
+[worker 45] backoffs took a total of 0.000000sec of runtime
+[worker 31] backoffs took a total of 0.000000sec of runtime
+[worker 8] backoffs took a total of 0.000000sec of runtime
+[worker 24] backoffs took a total of 0.000000sec of runtime
+[worker 22] backoffs took a total of 0.000000sec of runtime
+[worker 15] backoffs took a total of 0.000000sec of runtime
+[worker 60] backoffs took a total of 0.000000sec of runtime
+[worker 51] backoffs took a total of 0.000000sec of runtime
+[worker 2] backoffs took a total of 0.000000sec of runtime
+[worker 58] backoffs took a total of 0.000000sec of runtime
+[worker 30] backoffs took a total of 0.000000sec of runtime
+[worker 52] backoffs took a total of 0.000000sec of runtime
+[worker 49] backoffs took a total of 0.000000sec of runtime
+[worker 36] backoffs took a total of 0.000000sec of runtime
+[worker 59] backoffs took a total of 0.000000sec of runtime
+[worker 35] backoffs took a total of 0.000000sec of runtime
+[worker 25] backoffs took a total of 0.000000sec of runtime
+[worker 0] backoffs took a total of 0.000000sec of runtime
+[worker 14] backoffs took a total of 0.000000sec of runtime
+[worker 44] backoffs took a total of 0.000000sec of runtime
+[worker 48] backoffs took a total of 0.000000sec of runtime
+[worker 17] backoffs took a total of 0.000000sec of runtime
+[worker 32] backoffs took a total of 0.000000sec of runtime
+[worker 55] backoffs took a total of 0.000000sec of runtime
+[worker 41] backoffs took a total of 0.000000sec of runtime
+[worker 10] backoffs took a total of 0.000000sec of runtime
+[worker 5] backoffs took a total of 0.000000sec of runtime
+[worker 1] backoffs took a total of 0.000000sec of runtime
+[worker 46] backoffs took a total of 0.000000sec of runtime
+[worker 61] backoffs took a total of 0.000000sec of runtime
+[worker 23] backoffs took a total of 0.000000sec of runtime
+[worker 57] backoffs took a total of 0.000000sec of runtime
+[worker 12] backoffs took a total of 0.000000sec of runtime
+
+Summary:
+loaded 1036920000 metrics in 423.656sec with 64 workers (mean rate 2447552.90 metrics/sec)
+loaded 103692000 rows in 423.656sec with 64 workers (mean rate 244755.29 rows/sec)
+$ du -sch
+522M    .
+522M    total
+```
+
+## 附录 C 执行查询样例
+
+```bash
+### 查询一种时间序列，范围是 24 小时，每 1 小时取平均，平均每秒可查询 12 次。
+$ cat /home/yewq/tsbs/victoriametricsquery.gz \
+  | gunzip \
+  | /home/yewq/tsbs/tsbs/bin/tsbs_run_queries_victoriametrics \
+  --urls="http://10.0.1.102:8428" \
+  --workers=8
+After 100 queries with 8 workers:
+Interval query rate: 10.64 queries/sec  Overall query rate: 10.64 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   283.23ms, med:   737.63ms, mean:   721.79ms, max:  998.17ms, stddev:   166.30ms, sum:  72.2sec, count: 100
+all queries                                                       :
+min:   283.23ms, med:   737.63ms, mean:   721.79ms, max:  998.17ms, stddev:   166.30ms, sum:  72.2sec, count: 100
+
+After 200 queries with 8 workers:
+Interval query rate: 12.78 queries/sec  Overall query rate: 11.61 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   283.23ms, med:   682.78ms, mean:   672.25ms, max:  998.17ms, stddev:   156.40ms, sum: 134.4sec, count: 200
+all queries                                                       :
+min:   283.23ms, med:   682.78ms, mean:   672.25ms, max:  998.17ms, stddev:   156.40ms, sum: 134.4sec, count: 200
+
+After 300 queries with 8 workers:
+Interval query rate: 12.76 queries/sec  Overall query rate: 11.97 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   684.29ms, mean:   665.96ms, max:  998.17ms, stddev:   153.20ms, sum: 199.8sec, count: 300
+all queries                                                       :
+min:   247.69ms, med:   684.29ms, mean:   665.96ms, max:  998.17ms, stddev:   153.20ms, sum: 199.8sec, count: 300
+
+After 400 queries with 8 workers:
+Interval query rate: 13.59 queries/sec  Overall query rate: 12.34 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   651.81ms, mean:   642.90ms, max:  998.17ms, stddev:   150.81ms, sum: 257.2sec, count: 400
+all queries                                                       :
+min:   247.69ms, med:   651.81ms, mean:   642.90ms, max:  998.17ms, stddev:   150.81ms, sum: 257.2sec, count: 400
+
+After 500 queries with 8 workers:
+Interval query rate: 11.98 queries/sec  Overall query rate: 12.26 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   649.92ms, mean:   643.18ms, max: 1082.30ms, stddev:   152.64ms, sum: 321.6sec, count: 500
+all queries                                                       :
+min:   247.69ms, med:   649.92ms, mean:   643.18ms, max: 1082.30ms, stddev:   152.64ms, sum: 321.6sec, count: 500
+
+After 600 queries with 8 workers:
+Interval query rate: 12.94 queries/sec  Overall query rate: 12.37 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   646.72ms, mean:   641.54ms, max: 1082.30ms, stddev:   150.74ms, sum: 384.9sec, count: 600
+all queries                                                       :
+min:   247.69ms, med:   646.72ms, mean:   641.54ms, max: 1082.30ms, stddev:   150.74ms, sum: 384.9sec, count: 600
+
+After 700 queries with 8 workers:
+Interval query rate: 11.37 queries/sec  Overall query rate: 12.22 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   654.85ms, mean:   651.73ms, max: 1082.30ms, stddev:   156.12ms, sum: 456.2sec, count: 700
+all queries                                                       :
+min:   247.69ms, med:   654.85ms, mean:   651.73ms, max: 1082.30ms, stddev:   156.12ms, sum: 456.2sec, count: 700
+
+After 800 queries with 8 workers:
+Interval query rate: 12.77 queries/sec  Overall query rate: 12.28 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   654.11ms, mean:   649.29ms, max: 1082.30ms, stddev:   152.84ms, sum: 519.4sec, count: 800
+all queries                                                       :
+min:   247.69ms, med:   654.11ms, mean:   649.29ms, max: 1082.30ms, stddev:   152.84ms, sum: 519.4sec, count: 800
+
+After 900 queries with 8 workers:
+Interval query rate: 11.25 queries/sec  Overall query rate: 12.16 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   669.02ms, mean:   656.46ms, max: 1082.30ms, stddev:   153.77ms, sum: 590.8sec, count: 900
+all queries                                                       :
+min:   247.69ms, med:   669.02ms, mean:   656.46ms, max: 1082.30ms, stddev:   153.77ms, sum: 590.8sec, count: 900
+
+After 1000 queries with 8 workers:
+Interval query rate: 10.59 queries/sec  Overall query rate: 11.98 queries/sec
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   675.55ms, mean:   665.48ms, max: 1082.30ms, stddev:   157.97ms, sum: 665.5sec, count: 1000
+all queries                                                       :
+min:   247.69ms, med:   675.55ms, mean:   665.48ms, max: 1082.30ms, stddev:   157.97ms, sum: 665.5sec, count: 1000
+
+Run complete after 1000 queries with 8 workers (Overall query rate 11.97 queries/sec):
+VictoriaMetrics mean of 1 metrics, all hosts, random 24h0m0s by 1h:
+min:   247.69ms, med:   675.55ms, mean:   665.48ms, max: 1082.30ms, stddev:   157.97ms, sum: 665.5sec, count: 1000
+all queries                                                       :
+min:   247.69ms, med:   675.55ms, mean:   665.48ms, max: 1082.30ms, stddev:   157.97ms, sum: 665.5sec, count: 1000
+wall clock time: 83.616272sec
+```
