@@ -22,7 +22,7 @@ title: Yewq's Blog
 author: yewq
 email: yewq@yewq.cn
 description: >- # this means to ignore newlines until "baseurl:"
-  欢迎来到 yewq 的博客！如果阅读中发现错误，请发邮件给我进行改进😊
+  欢迎来到 yewq 的博客！如果阅读中发现问题，欢迎在 [Github 仓库](https://github.com/yewq/yewq.github.io/)中创建 Issues 一起讨论😊
 github_username:  yewq
 
 baseurl: "" # the subpath of your site, e.g. /blog
