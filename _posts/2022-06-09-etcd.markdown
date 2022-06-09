@@ -1,0 +1,326 @@
+---
+layout: post
+title:  "etcd"
+date:   2022-06-09 18:07:18 +0800
+categories: linux
+---
+
+etcd 是一个一致的分布式键值存储。在分布式系统中主要用作单独的协调服务。并且旨在保存可以完全放入内存的少量数据。
+
+目录
+[1. 基本使用](#1-基本使用)
+[1.3 每个节点开始运行](#13-每个节点开始运行)
+[参考资料](#参考资料)
+
+## 1. 基本使用
+## 1.1 下载
+ ```
+$ wget https://github.com/etcd-io/etcd/releases/download/v3.5.2/etcd-v3.5.2-linux-arm64.tar.gz
+$ tar -zxf etcd-v3.5.2-linux-arm64.tar.gz
+```
+## 1.2 每个节点都需要设置的公共环境变量
+```
+$ cd ~/etcd-v3.5.2-linux-arm64/
+$ vim etcd.env
+export TOKEN=token-01
+export CLUSTER_STATE=new
+export NAME_1=machine-1
+export NAME_2=machine-2
+export NAME_3=machine-3
+export NAME_4=machine-4
+export HOST_1=10.0.0.211
+export HOST_2=10.0.0.170
+export HOST_3=10.0.0.182
+export HOST_4=10.0.0.225
+export CLUSTER=${NAME_1}=http://${HOST_1}:2380,${NAME_2}=http://${HOST_2}:2380,${NAME_3}=http://${HOST_3}:2380
+export ETCDCTL_API=3
+export ENDPOINTS=$HOST_1:2379,$HOST_2:2379,$HOST_3:2379
+$ source etcd.env
+```
+## 1.3 每个节点开始运行
+- --initial-advertise-peer-urls: 向其他节点宣称的对等通信URL
+- --listen-peer-urls: 工作时的对等通信URL
+- --advertise-client-urls: 向公众宣称的客户端监听的URL
+- --listen-client-urls: 监听etcdcli客户端命令的URL
+- 节点1
+```
+$ cd ~/etcd-v3.5.2-linux-arm64/
+$ vim etcd1.sh
+THIS_NAME=${NAME_1}
+THIS_IP=${HOST_1}
+./etcd --data-dir=data.etcd \
+       --name ${THIS_NAME} \
+       --listen-peer-urls http://${THIS_IP}:2380 \
+       --listen-client-urls http://${THIS_IP}:2379 \
+       --advertise-client-urls http://${THIS_IP}:2379 \
+       --initial-advertise-peer-urls http://${THIS_IP}:2380 \
+       --initial-cluster ${CLUSTER} \
+       --initial-cluster-state ${CLUSTER_STATE} \
+       --initial-cluster-token ${TOKEN}
+$ sh etcd1.sh
+```
+- 节点2，类似于节点1
+```
+$ vim etcd2.sh
+THIS_NAME=${NAME_2}
+THIS_IP=${HOST_2}
+...
+$ sh etcd2.sh
+```
+- 节点3，类似于节点1
+```
+$ vim etcd3.sh
+THIS_NAME=${NAME_3}
+THIS_IP=${HOST_3}
+...
+$ sh etcd3.sh
+```
+## 1.4 使用如下指令重新启动
+```
+$ ./etcd --data-dir=data.etcd \
+       --name machine-1 \
+       --listen-peer-urls http://10.0.0.211:2380 \
+       --advertise-client-urls http://10.0.0.211:2379 \
+       --listen-client-urls http://10.0.0.211:2379
+```
+```
+$ ./etcd --data-dir=data.etcd \
+       --name machine-2 \
+       --listen-peer-urls http://10.0.0.170:2380 \
+       --advertise-client-urls http://10.0.0.170:2379 \
+       --listen-client-urls http://10.0.0.170:2379
+```
+```
+$ ./etcd --data-dir=data.etcd \
+       --name machine-3 \
+       --listen-peer-urls http://10.0.0.182:2380 \
+       --advertise-client-urls http://10.0.0.182:2379 \
+       --listen-client-urls http://10.0.0.182:2379
+```
+```
+$ ./etcd --data-dir=data.etcd \
+       --name machine-4 \
+       --listen-peer-urls http://10.0.0.225:2380 \
+       --advertise-client-urls http://10.0.0.225:2379 \
+       --listen-client-urls http://10.0.0.225:2379
+```
+## 1.5 列出集群的成员
+- 必须要有50%以上的成员在线，集群服务才能启动
+- `$ENDPOINTS` 可以是一个ip：`127.0.0.1:2379`; 也可以是集群内的多个IP：`10.0.0.211:2379,10.0.0.170:2379,10.0.0.182:2379`
+```bash
+$ ./etcdctl --endpoints=$ENDPOINTS member list --write-out=table
++------------------+---------+-----------+------------------------+------------------------+------------+
+|        ID        | STATUS  |   NAME    |       PEER ADDRS       |      CLIENT ADDRS      | IS LEARNER |
++------------------+---------+-----------+------------------------+------------------------+------------+
+| 18e5cb4824a28f0d | started | machine-1 | http://10.0.0.211:2380 | http://10.0.0.211:2379 |      false |
+| 1e9be99c5d04da10 | started | machine-2 | http://10.0.0.170:2380 | http://10.0.0.170:2379 |      false |
+| 40ffe3603a8c6987 | started | machine-3 | http://10.0.0.182:2380 | http://10.0.0.182:2379 |      false |
++------------------+---------+-----------+------------------------+------------------------+------------+
+```
+## 1.6 查看集群的状态
+`--endpoints`代表了要查询的节点，一般需要包括集群所有节点
+```
+$ ./etcdctl --write-out=table --endpoints=$ENDPOINTS endpoint status
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+|    ENDPOINT     |        ID        | VERSION | DB SIZE | IS LEADER | IS LEARNER | RAFT TERM | RAFT INDEX | RAFT APPLIED INDEX | ERRORS |
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+| 10.0.0.211:2379 | 18e5cb4824a28f0d |   3.5.2 |  328 kB |     false |      false |         2 |         11 |                 11 |        |
+| 10.0.0.170:2379 | 1e9be99c5d04da10 |   3.5.2 |  328 kB |     false |      false |         2 |         11 |                 11 |        |
+| 10.0.0.182:2379 | 40ffe3603a8c6987 |   3.5.2 |  328 kB |      true |      false |         2 |         11 |                 11 |        |
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+```
+当4个节点的集群只有2个在线时，会选不出领导，查看状态时，会有最后一栏的无领导错误。此时即无法列除成员列表，也无法读取键值。代表etcd没有正常工作。
+```
+$ ./etcdctl --write-out=table --endpoints=$ENDPOINTS endpoint status
+{"level":"warn","ts":"2022-02-17T08:56:40.641+0800","logger":"etcd-client","caller":"v3/retry_interceptor.go:62","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0x40001481c0/10.0.0.211:2379","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = latest balancer error: last connection error: connection error: desc = \"transport: Error while dialing dial tcp 10.0.0.211:2379: connect: connection refused\""}
+Failed to get the status of endpoint 10.0.0.211:2379 (context deadline exceeded)
+{"level":"warn","ts":"2022-02-17T08:56:45.649+0800","logger":"etcd-client","caller":"v3/retry_interceptor.go:62","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0x40001481c0/10.0.0.211:2379","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = latest balancer error: last connection error: connection error: desc = \"transport: Error while dialing dial tcp 10.0.0.225:2379: connect: connection refused\""}
+Failed to get the status of endpoint 10.0.0.225:2379 (context deadline exceeded)
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+-----------------------+
+|    ENDPOINT     |        ID        | VERSION | DB SIZE | IS LEADER | IS LEARNER | RAFT TERM | RAFT INDEX | RAFT APPLIED INDEX |        ERRORS         |
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+-----------------------+
+| 10.0.0.170:2379 | 1e9be99c5d04da10 |   3.5.2 |  328 kB |     false |      false |        14 |         60 |                 60 | etcdserver: no leader |
+| 10.0.0.182:2379 | 40ffe3603a8c6987 |   3.5.2 |  328 kB |     false |      false |        14 |         60 |                 60 | etcdserver: no leader |
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+-----------------------+
+```
+## 1.7 查看集群的健康状况
+```
+$ ./etcdctl --endpoints=$ENDPOINTS endpoint health
+10.0.0.170:2379 is healthy: successfully committed proposal: took = 6.443405ms
+10.0.0.182:2379 is healthy: successfully committed proposal: took = 7.639586ms
+10.0.0.211:2379 is healthy: successfully committed proposal: took = 6.094225ms
+```
+## 1.8 增加节点
+- 在已有的集群中增加待添加成员的信息，后4项信息用来传递给待添加的节点进行集群接入
+```
+$ ./etcdctl --endpoints=$ENDPOINTS \
+            member add machine-4 \
+            --peer-urls=http://10.0.0.225:2380
+Member d20d034a560eb806 added to cluster 4886a0bd2ae03355
+
+ETCD_NAME="machine-4"
+ETCD_INITIAL_CLUSTER="machine-1=http://10.0.0.211:2380,machine-2=http://10.0.0.170:2380,machine-3=http://10.0.0.182:2380,machine-4=http://10.0.0.225:2380"
+ETCD_INITIAL_ADVERTISE_PEER_URLS="http://10.0.0.225:2380"
+ETCD_INITIAL_CLUSTER_STATE="existing"
+```
+- 在新节点上执行命令
+```
+./etcd --data-dir=data.etcd \
+       --name machine-4 \
+       --listen-peer-urls http://10.0.0.225:2380 \
+       --listen-client-urls http://10.0.0.225:2379 \
+       --advertise-client-urls http://10.0.0.225:2379 \
+       --initial-advertise-peer-urls http://10.0.0.225:2380 \
+       --initial-cluster "machine-1=http://10.0.0.211:2380,machine-2=http://10.0.0.170:2380,machine-3=http://10.0.0.182:2380,machine-4=http://10.0.0.225:2380" \
+       --initial-cluster-state "existing" \
+       --initial-cluster-token token-01
+```
+## 1.9 删除节点
+```
+$ ./etcdctl --endpoints=$ENDPOINTS \
+            member remove d20d034a560eb806
+```
+此时重复启动会报下列错误，自动退出程序。下次添加该节点需要输出data.d数据目录。因为节点id已经生成，保存在里面，使用相同命令启动会认为已有id不重新去集群中获取了，所以以老id集群不认。
+```
+{"level":"warn","ts":"2022-03-02T02:09:19.865-0500","caller":"etcdserver/server.go:1146","msg":"server error","error":"the member has been permanently removed from the cluster"}
+{"level":"warn","ts":"2022-03-02T02:09:19.865-0500","caller":"etcdserver/server.go:1147","msg":"data-dir used by this member must be removed"}
+{"level":"warn","ts":"2022-03-02T02:09:19.865-0500","caller":"etcdserver/server.go:2042","msg":"stopped publish because server is stopped","local-member-id":"513b880835e16d70","local-member-attributes":"{Name:yewq2 ClientURLs:[http://10.0.0.108:2379]}","publish-timeout":"7s","error":"etcdserver: server stopped"}
+```
+## 1.10 更新节点的ip
+- 原来的节点4ip是10.0.1.199
+```
+$ ./etcdctl --endpoints=$ENDPOINTS member list --write-out=table
++------------------+---------+-----------+------------------------+------------------------+------------+
+|        ID        | STATUS  |   NAME    |       PEER ADDRS       |      CLIENT ADDRS      | IS LEARNER |
++------------------+---------+-----------+------------------------+------------------------+------------+
+|  74ceacd56b76dc4 | started | machine-4 | http://10.0.1.199:2380 | http://10.0.1.199:2379 |      false |
+| 18e5cb4824a28f0d | started | machine-1 | http://10.0.0.211:2380 | http://10.0.0.211:2379 |      false |
+| 1e9be99c5d04da10 | started | machine-2 | http://10.0.0.170:2380 | http://10.0.0.170:2379 |      false |
+| 40ffe3603a8c6987 | started | machine-3 | http://10.0.0.182:2380 | http://10.0.0.182:2379 |      false |
++------------------+---------+-----------+------------------------+------------------------+------------+
+```
+- 更换节点的ip以后，重新查看集群成员，ip还是老ip。
+- 详见问题2.3
+```
+$ ./etcdctl --endpoints=$ENDPOINTS member list --write-out=table
++------------------+---------+-----------+------------------------+------------------------+------------+
+|        ID        | STATUS  |   NAME    |       PEER ADDRS       |      CLIENT ADDRS      | IS LEARNER |
++------------------+---------+-----------+------------------------+------------------------+------------+
+|  74ceacd56b76dc4 | started | machine-4 | http://10.0.1.199:2380 | http://10.0.0.225:2379 |      false |
+| 18e5cb4824a28f0d | started | machine-1 | http://10.0.0.211:2380 | http://10.0.0.211:2379 |      false |
+| 1e9be99c5d04da10 | started | machine-2 | http://10.0.0.170:2380 | http://10.0.0.170:2379 |      false |
+| 40ffe3603a8c6987 | started | machine-3 | http://10.0.0.182:2380 | http://10.0.0.182:2379 |      false |
++------------------+---------+-----------+------------------------+------------------------+------------+
+```
+- 使用命令进行成员信息更新
+```
+$ ./etcdctl  --endpoints=$ENDPOINTS member update 74ceacd56b76dc4 --peer-urls="http://10.0.0.225:2380"
+Member  74ceacd56b76dc4 updated in cluster 4886a0bd2ae03355
+```
+- 此时成员信息就正常了
+```
+$ ./etcdctl --endpoints=$ENDPOINTS member list --write-out=table
++------------------+---------+-----------+------------------------+------------------------+------------+
+|        ID        | STATUS  |   NAME    |       PEER ADDRS       |      CLIENT ADDRS      | IS LEARNER |
++------------------+---------+-----------+------------------------+------------------------+------------+
+|  74ceacd56b76dc4 | started | machine-4 | http://10.0.0.225:2380 | http://10.0.0.225:2379 |      false |
+| 18e5cb4824a28f0d | started | machine-1 | http://10.0.0.211:2380 | http://10.0.0.211:2379 |      false |
+| 1e9be99c5d04da10 | started | machine-2 | http://10.0.0.170:2380 | http://10.0.0.170:2379 |      false |
+| 40ffe3603a8c6987 | started | machine-3 | http://10.0.0.182:2380 | http://10.0.0.182:2379 |      false |
++------------------+---------+-----------+------------------------+------------------------+------------+
+```
+## 1.1 向集群中写入key-value值
+- 只往一个节点写数据时，只要集群工作正常，所有节点都可以拿到数据
+```
+$ ./etcdctl --endpoints=$ENDPOINTS put foo "Hello World!"
+```
+## 1.12 从集群中读取key-value值
+```
+$ ./etcdctl --endpoints=$ENDPOINTS  get foo
+foo
+Hello World!
+```
+```
+$ ./etcdctl --endpoints=$ENDPOINTS --write-out="json" get foo
+{"header":{"cluster_id":5226041151938638677,"member_id":1794063537289727757,"revision":2,"raft_term":2},"kvs":[{"key":"Zm9v","create_revision":2,"mod_revision":2,"version":1,"value":"SGVsbG8gV29ybGQh"}],"count":1}
+```
+## 1.13 删除集群中的key-value值
+```
+$ ./etcdctl --endpoints=$ENDPOINTS del foo
+```
+
+
+
+# 2. 问题
+## 2.1 列出成员时出现上下文错误
+```
+$ ./etcdctl --endpoints=$ENDPOINTS member list
+{"level":"warn","ts":"2022-02-15T10:37:31.264+0800","logger":"etcd-client","caller":"v3/retry_interceptor.go:62","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0x400043ea80/10.0.0.211:2379","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+Error: context deadline exceeded
+```
+- 原因：未打开防火墙
+## 2.2 etcd警告“请求被忽略（集群ID不匹配）”是什么意思？
+每个新的etcd群集都会根据初始群集配置和用户提供的唯一initial-cluster-token值生成一个新的群集ID 。通过具有唯一的集群ID，可以保护etcd免受可能破坏集群的跨集群交互的影响。  
+通常，此警告是在拆除旧群集，然后为新群集重新使用某些对等地址之后发生的。如果旧集群中的任何etcd进程仍在运行，它将尝试与新集群联系。新集群将识别出集群ID不匹配，然后忽略该请求并发出此警告。通常通过确保不同群集之间的对等地址不相交来清除此警告。
+```
+{"level":"warn","ts":"2022-02-16T14:17:26.020+0800","caller":"rafthttp/http.go:500","msg":"request cluster ID mismatch","local-member-id":"1e9be99c5d04da10","local-member-cluster-id":"4886a0bd2ae03355","local-member-server-version":"3.5.2","local-member-server-minimum-cluster-version":"3.0.0","remote-peer-server-name":"40e3d5fa29fb7bfa","remote-peer-server-version":"3.5.2","remote-peer-server-minimum-cluster-version":"3.0.0","remote-peer-cluster-id":"60b938930e9c7fc5"}
+```
+## 2.3 为什么不更改--listen-peer-urls或--initial-advertise-peer-urls更新广告中的对等 URL etcdctl member list？
+https://doczhcn.gitbook.io/etcd/index/index-1/clustering/runtime-configuration
+成员的通告对等 URL 来自--initial-advertise-peer-urls初始集群引导。在启动成员后更改侦听对等 URL 或初始广告对等不会影响导出的广告对等 URL，因为更改必须通过仲裁以避免成员配置脑裂。用于etcdctl member update更新成员的对等 URL。  
+要更新成员的 advertise peer URLs, 首先通过成员命令更新它然后再重启成员。需要额外的行为是因为更新 peer URL 修改了集群范围配置并能影响 etcd 集群的健康。
+## 2.4 一个节点的集群中加入一新成员后，集群服务挂掉？
+因为加入新成员后，集群总数是2，但在线数是1，不符合集群 启动>50%要求。会等待新节点上线后再启集群服务。
+
+# 3. 内部原理
+## 3.1 集群id的生成方式
+[博客：管理etcd cluster成员的几点注意事项](https://www.modb.pro/db/153295)
+### 每个节点的cluster ID到底是怎么产生的呢？
+首先判断本地是否存在WAL file（数据目录里的数据库），如果有，就从本地 WAL file中读取cluster ID。如果本地没有WAL file， 则判断启动参数 "--initial-cluster-state"的值，如果是“existing"，意思是要加入一个已经存在的cluster，所以需要从peers那里获取clusterID；如果是"new"，意思是要创建一个新的cluster，所以就需要自己生成cluster ID了。
+![](https://oss-emcsprod-public.modb.pro/wechatSpider/modb_20211101_53612cae-3af2-11ec-be38-fa163eb4f6be.png)
+- 新的集群如何自己生成cluster ID
+[github ](https://github.com/etcd-io/etcd/blob/main/server/etcdserver/api/membership/cluster.go)
+```
+func (c *RaftCluster) genID() {
+	mIDs := c.MemberIDs()
+	b := make([]byte, 8*len(mIDs))
+	for i, id := range mIDs {
+		binary.BigEndian.PutUint64(b[8*i:], uint64(id))
+	}
+	hash := sha1.Sum(b)
+	c.cid = types.ID(binary.BigEndian.Uint64(hash[:8]))
+}
+```
+将每个`成员节点的ID`拼在一起，计算出一个sha1摘要，取前8个byte作为clusterID。
+- 那么每个成员的ID又是怎么生成的呢？对应的代码如下：
+```
+func computeMemberId(peerURLs types.URLs, clusterName string, now *time.Time) types.ID {
+	peerURLstrs := peerURLs.StringSlice()
+	sort.Strings(peerURLstrs)
+	joinedPeerUrls := strings.Join(peerURLstrs, "")
+	b := []byte(joinedPeerUrls)
+
+	b = append(b, []byte(clusterName)...)
+	if now != nil {
+		b = append(b, []byte(fmt.Sprintf("%d", now.Unix()))...)
+	}
+
+	hash := sha1.Sum(b)
+	return types.ID(binary.BigEndian.Uint64(hash[:8]))
+}
+```
+显然，每个成员节点的ID是由peerURLs和clusterName决定的。上面函数中最后一个参数now对于新集群实际传入的是nil，所以可以忽略。peerURLs对应的就是启动参数`--initial-cluster`中的URL，而clusterName对应的就是启动参数`--initial-cluster-token`的值。计算出一个sha1摘要，最后取前8个字节。
+
+
+## 参考资料
+
+1. [GitHub 仓库](https://github.com/etcd-io/etcd)
+2. [官方文档](https://etcd.io/docs/)
+3. [文档：常见问题](https://etcd.io/docs/v3.5/faq/)
+4. [文档：配置etcd的三种方式](https://etcd.io/docs/v3.5/op-guide/configuration/)
+5. [文档：数据迁移api v2-v3](https://etcd.io/docs/v3.5/op-guide/v2-migration)
+6. [中文文档](https://etcd.cn/docs/current/demo/)
+7.  [资料：kubernetes 上的etcd部署](https://kubernetes.io/zh/docs/tasks/administer-cluster/configure-upgrade-etcd/)
+8. [博客：Etcd 使用入门](https://www.jianshu.com/p/f68028682192)
+9. [博客：etcd集群部署与遇到的坑](https://www.cnblogs.com/breg/p/5728237.html)
+10. [博客：ETCD 的配置详解](https://zhuanlan.zhihu.com/p/383499555)
