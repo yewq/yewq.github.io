@@ -1,0 +1,7 @@
+Here's an example of how to embed a Gist on GitHub Pages:
+
+```
+{% gist a98a25c09e11c8503c268720c619371c %}
+```
+
+All you need to do is copy and paste the Gist's ID from the URL (here `a98a25c09e11c8503c268720c619371c`), and add it to a `gist` tag surrounded by `{%` and `%}`.
