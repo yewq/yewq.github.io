@@ -1,16 +1,14 @@
 ---
 layout: post
-title:  "Github"
+title:  "Gist"
 date:   2022-07-04 14:52:57 +0800
 categories: linux
 ---
 
-## Gist
-
 Here's an example of how to embed a Gist on GitHub Pages:
 
 ```
-{% gist a98a25c09e11c8503c268720c619371c %}
+{% gist yewq/a98a25c09e11c8503c268720c619371c %}
 ```
 
 
