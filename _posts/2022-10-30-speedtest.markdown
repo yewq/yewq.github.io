@@ -5,6 +5,8 @@ date:   2022-10-30 19:54:51 +0800
 categories: linux
 ---
 
+用 Javascript 实现，轻量级的网络测速软件。
+
 ## 安装
 
 ```shell
@@ -82,7 +84,7 @@ $ sudo systemctl reload nginx.service
 
 ## 运行
 
-https://speedtest.yewq.cn/
+- [【主页】speedtest.yewq.cn](https://speedtest.yewq.cn/)
 
 ## 参考资料
 
